@@ -74,22 +74,21 @@ void HardwareManager::testLEDHardware() {
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
         Serial.printf("\nChannel %d: %s (GPIO %d)\n", i, channelNames[i], ledPins[i]);
         Serial.println("LED should be ON now...");
-        uint16_t duty = (MAX_DUTY_VALUE * 50) / 100;
-        ledcWrite(i, duty);
+        // Test menggunakan 50% dari MAX_PERCENT_LIMIT
+        setChannelBrightness(i, 50);
         delay(2000);
-        ledcWrite(i, 0);
+        setChannelBrightness(i, 0);
         Serial.println("LED OFF");
         delay(500);
     }
     Serial.println("\n=== ALL CHANNELS TEST (50%) ===");
     Serial.println("All LEDs ON for 3 seconds...");
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
-        uint16_t duty = (MAX_DUTY_VALUE * 50) / 100;
-        ledcWrite(i, duty);
+        setChannelBrightness(i, 50);
     }
     delay(3000);
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
-        ledcWrite(i, 0);
+        setChannelBrightness(i, 0);
     }
     Serial.println("All LEDs OFF");
     Serial.println("=== HARDWARE TEST COMPLETE ===\n");
@@ -174,6 +173,16 @@ void HardwareManager::printLiveDashboard(uint8_t brightness[]) {
         Serial.println("Cost (Rp): N/A");
     }
     Serial.printf("LED Brightness: RB:%d CW:%d B:%d FS:%d\n", brightness[CH_RB], brightness[CH_CW], brightness[CH_B], brightness[CH_FS]);
+    
+    // Tambahkan info actual output setelah ceiling
+    Serial.printf("Actual Output (ceiling %d%%): RB:%.1f CW:%.1f B:%.1f FS:%.1f\n", 
+        MAX_PERCENT_LIMIT,
+        (brightness[CH_RB] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_CW] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_B] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_FS] * MAX_PERCENT_LIMIT) / 100.0f
+    );
+    
     float avgBright = 0;
     for(int i = 0; i < NUM_LED_CHANNELS; i++) avgBright += brightness[i];
     avgBright /= NUM_LED_CHANNELS;
@@ -253,9 +262,13 @@ void HardwareManager::setupPWMChannels() {
 void HardwareManager::setChannelBrightness(uint8_t channel, uint8_t percent) {
     if(channel >= NUM_LED_CHANNELS) return;
     percent = constrain(percent, 0, 100);
-    const float MAX_ALLOWED_DUTY = MAX_DUTY_VALUE * ((float)MAX_PERCENT_LIMIT / 100.0f);
-    uint16_t duty = (uint16_t)(((float)percent / 100.0f) * MAX_DUTY_VALUE);
-    if(duty > (uint16_t)MAX_ALLOWED_DUTY) duty = (uint16_t)MAX_ALLOWED_DUTY;
+    
+    // PERBAIKAN: percent adalah persentase dari MAX_PERCENT_LIMIT (ceiling)
+    // Contoh: percent=100, MAX_PERCENT_LIMIT=90 → actualPercent=90
+    //         percent=50, MAX_PERCENT_LIMIT=90 → actualPercent=45
+    float actualPercent = ((float)percent * MAX_PERCENT_LIMIT) / 100.0f;
+    
+    uint16_t duty = (uint16_t)((actualPercent / 100.0f) * MAX_DUTY_VALUE);
     ledcWrite(channel, duty);
 }
 
@@ -315,16 +328,17 @@ void HardwareManager::updateOLEDDisplay(uint8_t brightness[]) {
     display.drawString(64, 12, tbuf);
     if(lastRoomTemp < -50.0f) snprintf(tbuf, sizeof(tbuf), "R:N/A");
     else snprintf(tbuf, sizeof(tbuf), "R:%.1f", lastRoomTemp);
-display.drawString(0, 24, tbuf);
-snprintf(line, sizeof(line), "RB:%d CW:%d", brightness[CH_RB], brightness[CH_CW]);
-display.drawString(0, 36, line);
-snprintf(line, sizeof(line), "B:%d FS:%d", brightness[CH_B], brightness[CH_FS]);
-display.drawString(0, 48, line);
-display.display();
+    display.drawString(0, 24, tbuf);
+    snprintf(line, sizeof(line), "RB:%d CW:%d", brightness[CH_RB], brightness[CH_CW]);
+    display.drawString(0, 36, line);
+    snprintf(line, sizeof(line), "B:%d FS:%d", brightness[CH_B], brightness[CH_FS]);
+    display.drawString(0, 48, line);
+    display.display();
 }
+
 void HardwareManager::run(uint8_t brightness[]) {
-updateTemperatures();
-updatePowerMonitoring();
-updateFanControl();
-updateOLEDDisplay(brightness);
+    updateTemperatures();
+    updatePowerMonitoring();
+    updateFanControl();
+    updateOLEDDisplay(brightness);
 }

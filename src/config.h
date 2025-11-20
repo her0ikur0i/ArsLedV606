@@ -17,6 +17,8 @@
 #define PWM_FREQUENCY 5000UL
 #define PWM_RESOLUTION_BITS 12
 #define MAX_DUTY_VALUE ((1 << PWM_RESOLUTION_BITS) - 1)
+
+// MAX_PERCENT_LIMIT = ceiling/batas maksimal kecerahan (untuk menjaga usia LED)
 #define MAX_PERCENT_LIMIT 90
 
 #define CH_RB 0
@@ -33,9 +35,11 @@
 #define SCHED_OFF_HOUR 21
 #define SCHED_OFF_MINUTE 0
 
-#define PEAK_BRIGHT_RB 90
+// Peak brightness = persentase dari MAX_PERCENT_LIMIT
+// Contoh: PEAK_BRIGHT_RB = 90 berarti 90% dari 90% = 81% duty cycle aktual
+#define PEAK_BRIGHT_RB 80
 #define PEAK_BRIGHT_CW 10
-#define PEAK_BRIGHT_B 100
+#define PEAK_BRIGHT_B 90
 #define PEAK_BRIGHT_FS 10
 
 #define DEFAULT_KWH_COST 1444

@@ -1,8 +1,8 @@
 #!/bin/bash
 
-echo "=== ArsLed V606 Final - RTC Format Fixed Edition ==="
-echo "Base: v602gpt.sh RTC handling + v605 hardware config"
-echo "Pin Config: Actual hardware (GPIO 4,5,6,7)"
+echo "=== ArsLed V606 Final - Ceiling Fix Edition ==="
+echo "Base: v606 + MAX_PERCENT_LIMIT as ceiling (not clamping)"
+echo "Peak brightness now percentage of MAX_PERCENT_LIMIT"
 echo ""
 
 mkdir -p src
@@ -98,6 +98,8 @@ cat <<'EOT_CONFIG' > src/config.h
 #define PWM_FREQUENCY 5000UL
 #define PWM_RESOLUTION_BITS 12
 #define MAX_DUTY_VALUE ((1 << PWM_RESOLUTION_BITS) - 1)
+
+// MAX_PERCENT_LIMIT = ceiling/batas maksimal kecerahan (untuk menjaga usia LED)
 #define MAX_PERCENT_LIMIT 90
 
 #define CH_RB 0
@@ -114,6 +116,8 @@ cat <<'EOT_CONFIG' > src/config.h
 #define SCHED_OFF_HOUR 21
 #define SCHED_OFF_MINUTE 0
 
+// Peak brightness = persentase dari MAX_PERCENT_LIMIT
+// Contoh: PEAK_BRIGHT_RB = 90 berarti 90% dari 90% = 81% duty cycle aktual
 #define PEAK_BRIGHT_RB 90
 #define PEAK_BRIGHT_CW 10
 #define PEAK_BRIGHT_B 100
@@ -373,22 +377,21 @@ void HardwareManager::testLEDHardware() {
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
         Serial.printf("\nChannel %d: %s (GPIO %d)\n", i, channelNames[i], ledPins[i]);
         Serial.println("LED should be ON now...");
-        uint16_t duty = (MAX_DUTY_VALUE * 50) / 100;
-        ledcWrite(i, duty);
+        // Test menggunakan 50% dari MAX_PERCENT_LIMIT
+        setChannelBrightness(i, 50);
         delay(2000);
-        ledcWrite(i, 0);
+        setChannelBrightness(i, 0);
         Serial.println("LED OFF");
         delay(500);
     }
     Serial.println("\n=== ALL CHANNELS TEST (50%) ===");
     Serial.println("All LEDs ON for 3 seconds...");
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
-        uint16_t duty = (MAX_DUTY_VALUE * 50) / 100;
-        ledcWrite(i, duty);
+        setChannelBrightness(i, 50);
     }
     delay(3000);
     for(int i = 0; i < NUM_LED_CHANNELS; i++) {
-        ledcWrite(i, 0);
+        setChannelBrightness(i, 0);
     }
     Serial.println("All LEDs OFF");
     Serial.println("=== HARDWARE TEST COMPLETE ===\n");
@@ -473,6 +476,16 @@ void HardwareManager::printLiveDashboard(uint8_t brightness[]) {
         Serial.println("Cost (Rp): N/A");
     }
     Serial.printf("LED Brightness: RB:%d CW:%d B:%d FS:%d\n", brightness[CH_RB], brightness[CH_CW], brightness[CH_B], brightness[CH_FS]);
+    
+    // Tambahkan info actual output setelah ceiling
+    Serial.printf("Actual Output (ceiling %d%%): RB:%.1f CW:%.1f B:%.1f FS:%.1f\n", 
+        MAX_PERCENT_LIMIT,
+        (brightness[CH_RB] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_CW] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_B] * MAX_PERCENT_LIMIT) / 100.0f,
+        (brightness[CH_FS] * MAX_PERCENT_LIMIT) / 100.0f
+    );
+    
     float avgBright = 0;
     for(int i = 0; i < NUM_LED_CHANNELS; i++) avgBright += brightness[i];
     avgBright /= NUM_LED_CHANNELS;
@@ -552,9 +565,13 @@ void HardwareManager::setupPWMChannels() {
 void HardwareManager::setChannelBrightness(uint8_t channel, uint8_t percent) {
     if(channel >= NUM_LED_CHANNELS) return;
     percent = constrain(percent, 0, 100);
-    const float MAX_ALLOWED_DUTY = MAX_DUTY_VALUE * ((float)MAX_PERCENT_LIMIT / 100.0f);
-    uint16_t duty = (uint16_t)(((float)percent / 100.0f) * MAX_DUTY_VALUE);
-    if(duty > (uint16_t)MAX_ALLOWED_DUTY) duty = (uint16_t)MAX_ALLOWED_DUTY;
+    
+    // PERBAIKAN: percent adalah persentase dari MAX_PERCENT_LIMIT (ceiling)
+    // Contoh: percent=100, MAX_PERCENT_LIMIT=90 → actualPercent=90
+    //         percent=50, MAX_PERCENT_LIMIT=90 → actualPercent=45
+    float actualPercent = ((float)percent * MAX_PERCENT_LIMIT) / 100.0f;
+    
+    uint16_t duty = (uint16_t)((actualPercent / 100.0f) * MAX_DUTY_VALUE);
     ledcWrite(channel, duty);
 }
 
@@ -614,217 +631,309 @@ void HardwareManager::updateOLEDDisplay(uint8_t brightness[]) {
     display.drawString(64, 12, tbuf);
     if(lastRoomTemp < -50.0f) snprintf(tbuf, sizeof(tbuf), "R:N/A");
     else snprintf(tbuf, sizeof(tbuf), "R:%.1f", lastRoomTemp);
-display.drawString(0, 24, tbuf);
-snprintf(line, sizeof(line), "RB:%d CW:%d", brightness[CH_RB], brightness[CH_CW]);
-display.drawString(0, 36, line);
-snprintf(line, sizeof(line), "B:%d FS:%d", brightness[CH_B], brightness[CH_FS]);
-display.drawString(0, 48, line);
-display.display();
+    display.drawString(0, 24, tbuf);
+    snprintf(line, sizeof(line), "RB:%d CW:%d", brightness[CH_RB], brightness[CH_CW]);
+    display.drawString(0, 36, line);
+    snprintf(line, sizeof(line), "B:%d FS:%d", brightness[CH_B], brightness[CH_FS]);
+    display.drawString(0, 48, line);
+    display.display();
 }
+
 void HardwareManager::run(uint8_t brightness[]) {
-updateTemperatures();
-updatePowerMonitoring();
-updateFanControl();
-updateOLEDDisplay(brightness);
+    updateTemperatures();
+    updatePowerMonitoring();
+    updateFanControl();
+    updateOLEDDisplay(brightness);
 }
 EOT_HW_CPP
+
 cat <<'EOT_MAIN' > src/main.cpp
 #include <Arduino.h>
 #include "HardwareManager.h"
 #include "Scheduler.h"
 #include "config.h"
+
 HardwareManager hw;
 Scheduler scheduler;
+
 unsigned long bootTimeStart = 0;
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastLiveDashboardTime = 0;
+
 void handleSerialCommands() {
-if(Serial.available()) {
-String command = Serial.readStringUntil('\n');
-command.trim();
-command.toUpperCase();
-if(command.startsWith("SETTIME=")) {
-String timeStr = command.substring(8);
-int h, m, s;
-if(sscanf(timeStr.c_str(), "%d:%d:%d", &h, &m, &s) == 3) {
-hw.adjustRTCTime(h, m, s);
-} else {
-Serial.println("Format: SETTIME=HH:MM:SS");
+    if(Serial.available()) {
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        command.toUpperCase();
+        
+        if(command.startsWith("SETTIME=")) {
+            String timeStr = command.substring(8);
+            int h, m, s;
+            if(sscanf(timeStr.c_str(), "%d:%d:%d", &h, &m, &s) == 3) {
+                hw.adjustRTCTime(h, m, s);
+            } else {
+                Serial.println("Format: SETTIME=HH:MM:SS");
+            }
+        } else if(command.startsWith("SETDATE=")) {
+            String dateStr = command.substring(8);
+            int y, m, d;
+            if(sscanf(dateStr.c_str(), "%d:%d:%d", &y, &m, &d) == 3) {
+                hw.adjustRTCDate(y, m, d);
+            } else {
+                Serial.println("Format: SETDATE=YY:MM:DD");
+            }
+        } else if(command == "TEST") {
+            Serial.println("\n=== HARDWARE TEST MODE ===");
+            hw.testLEDHardware();
+        } else if(command == "HELP") {
+            Serial.println("\n--- COMMANDS ---");
+            Serial.println("SETTIME=HH:MM:SS");
+            Serial.println("SETDATE=YY:MM:DD");
+            Serial.println("TEST (Hardware test)");
+            Serial.println("HELP");
+            Serial.println("----------------\n");
+        } else if(command.length() > 0) {
+            Serial.printf("Unknown: %s (type HELP)\n", command.c_str());
+        }
+    }
 }
-} else if(command.startsWith("SETDATE=")) {
-String dateStr = command.substring(8);
-int y, m, d;
-if(sscanf(dateStr.c_str(), "%d:%d:%d", &y, &m, &d) == 3) {
-hw.adjustRTCDate(y, m, d);
-} else {
-Serial.println("Format: SETDATE=YY:MM:DD");
-}
-} else if(command == "TEST") {
-Serial.println("\n=== HARDWARE TEST MODE ===");
-hw.testLEDHardware();
-} else if(command == "HELP") {
-Serial.println("\n--- COMMANDS ---");
-Serial.println("SETTIME=HH:MM:SS");
-Serial.println("SETDATE=YY:MM:DD");
-Serial.println("TEST (Hardware test)");
-Serial.println("HELP");
-Serial.println("----------------\n");
-} else if(command.length() > 0) {
-Serial.printf("Unknown: %s (type HELP)\n", command.c_str());
-}
-}
-}
+
 void setup() {
-Serial.begin(115200);
-delay(1000);
-while(Serial.available()) Serial.read();
-pinMode(ONBOARD_LED_PIN, OUTPUT);
-digitalWrite(ONBOARD_LED_PIN, LOW);
-Serial.println("\n=== BOOT SEQUENCE ===");
-for(int i = 0; i < 5; i++) {
-digitalWrite(ONBOARD_LED_PIN, HIGH);
-delay(200);
-digitalWrite(ONBOARD_LED_PIN, LOW);
-delay(200);
+    Serial.begin(115200);
+    delay(1000);
+    while(Serial.available()) Serial.read();
+    
+    pinMode(ONBOARD_LED_PIN, OUTPUT);
+    digitalWrite(ONBOARD_LED_PIN, LOW);
+    
+    Serial.println("\n=== BOOT SEQUENCE ===");
+    for(int i = 0; i < 5; i++) {
+        digitalWrite(ONBOARD_LED_PIN, HIGH);
+        delay(200);
+        digitalWrite(ONBOARD_LED_PIN, LOW);
+        delay(200);
+    }
+    
+    hw.begin();
+    scheduler.begin();
+    bootTimeStart = millis();
+    
+    Serial.println("\n[Waiting 10s for serial commands...]");
+    Serial.println("Type TEST to run hardware test");
+    unsigned long startWait = millis();
+    while(millis() - startWait < 10000) {
+        handleSerialCommands();
+        delay(10);
+    }
+    
+    hw.printBootSummary();
+    
+    Serial.println("\n=== ENTERING MAIN LOOP ===");
+    Serial.println("LED control via scheduler active");
+    Serial.printf("MAX_PERCENT_LIMIT: %d%% (ceiling untuk menjaga usia LED)\n", MAX_PERCENT_LIMIT);
+    Serial.println("Peak brightness adalah persentase dari ceiling");
+    Serial.println("Type TEST anytime to test hardware\n");
 }
-hw.begin();
-scheduler.begin();
-bootTimeStart = millis();
-Serial.println("\n[Waiting 10s for serial commands...]");
-Serial.println("Type TEST to run hardware test");
-unsigned long startWait = millis();
-while(millis() - startWait < 10000) {
-handleSerialCommands();
-delay(10);
-}
-hw.printBootSummary();
-Serial.println("\n=== ENTERING MAIN LOOP ===");
-Serial.println("LED control via scheduler active");
-Serial.println("Type TEST anytime to test hardware\n");
-}
+
 void loop() {
-yield();
-handleSerialCommands();
-unsigned long currentTime = millis();
-if(currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
-digitalWrite(ONBOARD_LED_PIN, HIGH);
-delay(50);
-digitalWrite(ONBOARD_LED_PIN, LOW);
-delay(50);
-digitalWrite(ONBOARD_LED_PIN, HIGH);
-delay(50);
-digitalWrite(ONBOARD_LED_PIN, LOW);
-lastHeartbeatTime = currentTime;
-}
-DateTime now = hw.getRTCTime();
-scheduler.run(now.hour(), now.minute());
-uint8_t currentBrightness[NUM_LED_CHANNELS];
-bool anyOn = false;
-for(int i = 0; i < NUM_LED_CHANNELS; i++) {
-currentBrightness[i] = scheduler.getBrightness(i);
-hw.setChannelBrightness(i, currentBrightness[i]);
-if(currentBrightness[i] > 0) anyOn = true;
-}
-static unsigned long lastDebugPrint = 0;
-if(currentTime - lastDebugPrint >= 10000) {
-SchedulePhase phase = scheduler.getCurrentPhase(now.hour(), now.minute());
-const char* phaseStr[] = {"OFF", "SUNRISE", "PEAK", "SUNSET"};
-Serial.printf("[DEBUG] Time:%02d:%02d Phase:%s LED:RB=%d CW=%d B=%d FS=%d\n", now.hour(), now.minute(), phaseStr[phase], currentBrightness[CH_RB], currentBrightness[CH_CW], currentBrightness[CH_B], currentBrightness[CH_FS]);
-lastDebugPrint = currentTime;
-}
-hw.run(currentBrightness);
-unsigned long interval = anyOn ? 10000UL : 1800000UL;
-if(currentTime - lastLiveDashboardTime >= interval) {
-hw.printLiveDashboard(currentBrightness);
-lastLiveDashboardTime = currentTime;
-}
-delay(100);
+    yield();
+    handleSerialCommands();
+    
+    unsigned long currentTime = millis();
+    
+    if(currentTime - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
+        digitalWrite(ONBOARD_LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(ONBOARD_LED_PIN, LOW);
+        delay(50);
+        digitalWrite(ONBOARD_LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(ONBOARD_LED_PIN, LOW);
+        lastHeartbeatTime = currentTime;
+    }
+    
+    DateTime now = hw.getRTCTime();
+    scheduler.run(now.hour(), now.minute());
+    
+    uint8_t currentBrightness[NUM_LED_CHANNELS];
+    bool anyOn = false;
+    for(int i = 0; i < NUM_LED_CHANNELS; i++) {
+        currentBrightness[i] = scheduler.getBrightness(i);
+        hw.setChannelBrightness(i, currentBrightness[i]);
+        if(currentBrightness[i] > 0) anyOn = true;
+    }
+    
+    static unsigned long lastDebugPrint = 0;
+    if(currentTime - lastDebugPrint >= 10000) {
+        SchedulePhase phase = scheduler.getCurrentPhase(now.hour(), now.minute());
+        const char* phaseStr[] = {"OFF", "SUNRISE", "PEAK", "SUNSET"};
+        Serial.printf("[DEBUG] Time:%02d:%02d Phase:%s LED:RB=%d CW=%d B=%d FS=%d", 
+            now.hour(), now.minute(), phaseStr[phase], 
+            currentBrightness[CH_RB], currentBrightness[CH_CW], 
+            currentBrightness[CH_B], currentBrightness[CH_FS]);
+        Serial.printf(" (Actual: RB=%.1f CW=%.1f B=%.1f FS=%.1f)\n",
+            (currentBrightness[CH_RB] * MAX_PERCENT_LIMIT) / 100.0f,
+            (currentBrightness[CH_CW] * MAX_PERCENT_LIMIT) / 100.0f,
+            (currentBrightness[CH_B] * MAX_PERCENT_LIMIT) / 100.0f,
+            (currentBrightness[CH_FS] * MAX_PERCENT_LIMIT) / 100.0f
+        );
+        lastDebugPrint = currentTime;
+    }
+    
+    hw.run(currentBrightness);
+    
+    unsigned long interval = anyOn ? 10000UL : 1800000UL;
+    if(currentTime - lastLiveDashboardTime >= interval) {
+        hw.printLiveDashboard(currentBrightness);
+        lastLiveDashboardTime = currentTime;
+    }
+    
+    delay(100);
 }
 EOT_MAIN
+
 cat <<'EOT_README' > README.md
-ArsLed Marine Light V606 - RTC Format Fixed Edition
-Key Features
+# ArsLed Marine Light V606 - Ceiling Fix Edition
 
-v602gpt.sh RTC handling (proven working format)
-Correct pin mapping (GPIO 4,5,6,7 for LEDs)
-Lower PWM frequency (5kHz for compatibility)
-Hardware test command (type TEST)
-Debug output every 10s
-ThingPulse SSD1306Wire driver
+## Key Features
+- **MAX_PERCENT_LIMIT as CEILING** (not clamping)
+- Peak brightness = percentage of MAX_PERCENT_LIMIT
+- v602gpt.sh RTC handling (proven working format)
+- Correct pin mapping (GPIO 4,5,6,7 for LEDs)
+- Lower PWM frequency (5kHz for compatibility)
+- Hardware test command (type TEST)
+- Debug output every 10s with actual output values
 
-Critical Fix
-RTC time format now matches v602gpt.sh:
+## Critical Concept: MAX_PERCENT_LIMIT as Ceiling
 
-Uses DateTime object correctly
-No garbage values (42:123 fixed)
-Format: HH:MM:SS DD/MM/YYYY
+**MAX_PERCENT_LIMIT = 90%** means absolute maximum LED output (untuk menjaga usia LED)
 
-Pin Configuration
-LED Channels:
+Peak brightness values are **percentages of this ceiling**:
 
-RB (Royal Blue): GPIO 4
-CW (Cool White): GPIO 5
-B (Blue): GPIO 6
-FS (Full Spec): GPIO 7
+```
+PEAK_BRIGHT_RB = 90   → 90% dari 90% = 81% duty cycle actual
+PEAK_BRIGHT_CW = 10   → 10% dari 90% = 9% duty cycle actual  
+PEAK_BRIGHT_B = 100   → 100% dari 90% = 90% duty cycle actual
+PEAK_BRIGHT_FS = 10   → 10% dari 90% = 9% duty cycle actual
+```
 
-Peripherals:
+**Formula:**
+```
+Actual Output = (PEAK_BRIGHT_X × MAX_PERCENT_LIMIT) / 100
+```
 
-Onboard LED: GPIO 15
-I2C SDA: GPIO 1
-I2C SCL: GPIO 2
-Fan: GPIO 3
+## Pin Configuration
 
-Temperature Sensors:
+**LED Channels:**
+- RB (Royal Blue): GPIO 4
+- CW (Cool White): GPIO 5  
+- B (Blue): GPIO 6
+- FS (Full Spec): GPIO 7
 
-Water: GPIO 8
-Heatsink: GPIO 9
-Room: GPIO 10
+**Peripherals:**
+- Onboard LED: GPIO 15
+- I2C SDA: GPIO 1
+- I2C SCL: GPIO 2
+- Fan: GPIO 3
 
-Quick Start
-chmod +x v606.sh
-./v606.sh
+**Temperature Sensors:**
+- Water: GPIO 8
+- Heatsink: GPIO 9
+- Room: GPIO 10
+
+## Quick Start
+
+```bash
+chmod +x 606_fixed_ceiling.sh
+./606_fixed_ceiling.sh
 pio run -t upload
 pio device monitor
-Commands
+```
 
-TEST: Hardware test (50% each channel 2s)
-SETTIME=HH:MM:SS
-SETDATE=YY:MM:DD
-HELP
+## Commands
 
-Expected Output
+- **TEST**: Hardware test (50% dari ceiling setiap channel 2s)
+- **SETTIME=HH:MM:SS**
+- **SETDATE=YY:MM:DD**
+- **HELP**
+
+## Expected Output
+
 After SETTIME=12:00:00:
-[DEBUG] Time:12:00 Phase:PEAK LED:RB=70 CW=30 B=100 FS=20
-If still showing Phase:OFF at 12:00:
 
-Check RTC battery (CR2032)
-Verify RTC module wiring
-Type TEST to bypass scheduler
+```
+[DEBUG] Time:12:00 Phase:PEAK LED:RB=90 CW=10 B=100 FS=10 (Actual: RB=81.0 CW=9.0 B=90.0 FS=9.0)
+```
 
-Troubleshooting
-Q: RTC shows garbage (42:123)?
+Live dashboard will show both values:
+```
+LED Brightness: RB:90 CW:10 B:100 FS:10
+Actual Output (ceiling 90%): RB:81.0 CW:9.0 B:90.0 FS:9.0
+```
+
+## Troubleshooting
+
+**Q: Ingin mengubah batas maksimal LED?**  
+A: Edit `#define MAX_PERCENT_LIMIT 90` di `config.h` (nilai 0-100)
+
+**Q: Ingin mengubah kecerahan peak?**  
+A: Edit `#define PEAK_BRIGHT_RB 90` dll (nilai 0-100, relatif terhadap ceiling)
+
+**Q: LED terlalu terang/redup?**  
+A: Periksa nilai `MAX_PERCENT_LIMIT` dan `PEAK_BRIGHT_X`. Actual output = (peak × ceiling) / 100
+
+**Q: RTC shows garbage (42:123)?**  
 A: Battery dead or RTC not init. Use SETTIME command.
-Q: LED not turning ON?
-A: Type TEST to verify hardware directly.
-Q: Phase shows OFF at noon?
-A: RTC time not set correctly. Verify with serial output.
 
-ArsLed V606 - RTC Format Fixed & Production Ready
+**Q: LED not turning ON?**  
+A: Type TEST to verify hardware directly.
+
+## Examples
+
+**Contoh 1: Conservative Mode (75% ceiling)**
+```cpp
+#define MAX_PERCENT_LIMIT 75
+#define PEAK_BRIGHT_RB 100    // Actual: 75%
+#define PEAK_BRIGHT_B 100     // Actual: 75%
+```
+
+**Contoh 2: High Performance (95% ceiling)**
+```cpp
+#define MAX_PERCENT_LIMIT 95
+#define PEAK_BRIGHT_RB 90     // Actual: 85.5%
+#define PEAK_BRIGHT_B 100     // Actual: 95%
+```
+
+**Contoh 3: Safe Testing (50% ceiling)**
+```cpp
+#define MAX_PERCENT_LIMIT 50
+#define PEAK_BRIGHT_RB 100    // Actual: 50%
+#define PEAK_BRIGHT_B 100     // Actual: 50%
+```
+
+---
+
+**ArsLed V606 - Ceiling Fix & Production Ready**
 EOT_README
+
 echo ""
-echo "=== v606 Generated Successfully ==="
+echo "=== v606 Ceiling Fix Generated Successfully ==="
 echo ""
-echo "Key Fixes:"
-echo "  - RTC format from v602gpt.sh (working)"
-echo "  - Correct pins (GPIO 4,5,6,7)"
-echo "  - PWM 5kHz (compatible)"
-echo "  - TEST command included"
-echo "  - Debug every 10s"
+echo "Key Changes:"
+echo "  - MAX_PERCENT_LIMIT now acts as CEILING"
+echo "  - Peak brightness = % of ceiling"
+echo "  - Formula: Actual = (peak × ceiling) / 100"
+echo "  - Debug shows both values"
+echo "  - Dashboard shows actual output"
+echo ""
+echo "Example with MAX_PERCENT_LIMIT=90:"
+echo "  PEAK_BRIGHT_RB=90  → Actual: 81%"
+echo "  PEAK_BRIGHT_B=100  → Actual: 90%"
+echo "  PEAK_BRIGHT_CW=10  → Actual: 9%"
 echo ""
 echo "Next steps:"
 echo "  1. pio run -t upload"
 echo "  2. pio device monitor"
-echo "  3. Wait for boot, check RTC format"
-echo "  4. Type TEST if RTC shows correct time"
-echo "  5. If Phase:OFF at noon → SETTIME=12:00:00"
+echo "  3. Check debug output for 'Actual:' values"
+echo "  4. Verify LED output matches ceiling formula"
 echo ""
